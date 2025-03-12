@@ -1,5 +1,5 @@
 // index.mjs
-import { runMapping } from './rdf-processor.js';
+import { parseTurtle } from '@comake/rmlmapper-js';
 import fs from 'fs';
 import { n3reasoner } from 'eyereasoner';
 import { QueryEngine } from '@comunica/query-sparql';
@@ -9,18 +9,39 @@ import * as N3 from 'n3';
   YARRRML mapping to reference medication.csv
 */
 const pharmaMapping = `
-prefixes:
-  ex: "http://example.com/"
-  schema: "http://schema.org/"
-mappings:
-  medication:
-    sources:
-      - ['medication.csv~csv']
-    s: ex:medication/$(artikel___ATC___label)
-    po:
-      - [ex:date, $(begin_date)]
-      - [schema:identifier, $(artikel___ATC___label)]
-      - [ex:room, $(room)]
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ql: <http://semweb.mmlab.be/ns/ql#> .
+@prefix ex: <http://example.com/> .
+@prefix schema: <http://schema.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<#LOGICALSOURCE>
+  rml:source "medication.csv";
+  rml:referenceFormulation ql:CSV.
+
+<#Mapping>
+  rml:logicalSource <#LOGICALSOURCE>;
+  
+  rr:subjectMap [
+    rr:template "http://example.com/medication/{artikel___ATC___label}";
+    rr:class ex:Medication;
+  ];
+  
+  rr:predicateObjectMap [
+    rr:predicate ex:date;
+    rr:objectMap [ rml:reference "begin_date" ];
+  ];
+  
+  rr:predicateObjectMap [
+    rr:predicate schema:identifier;
+    rr:objectMap [ rml:reference "artikel___ATC___label" ];
+  ];
+  
+  rr:predicateObjectMap [
+    rr:predicate ex:room;
+    rr:objectMap [ rml:reference "room" ];
+  ].
 `;
 
 // Define simple reasoning rules in N3 syntax
@@ -70,6 +91,80 @@ const query = `
        a ex:Medication.
 }.
 `;
+
+// Function to convert JSON-LD to N-Triples
+async function jsonLdToNTriples(jsonLdData) {
+  // Create a simple store for holding the triples
+  const store = new N3.Store();
+  
+  // Process each entity in the JSON-LD array
+  jsonLdData.forEach(entity => {
+    // Get the subject from @id or generate a blank node
+    const subject = entity['@id'] || `_:b${Math.random().toString(36).substring(2, 15)}`;
+    
+    // Process each predicate-object pair
+    Object.entries(entity).forEach(([predicate, objects]) => {
+      if (predicate === '@id' || predicate === '@context') return;
+      
+      // Handle type separately
+      if (predicate === '@type') {
+        const types = Array.isArray(objects) ? objects : [objects];
+        types.forEach(type => {
+          store.addQuad(
+            N3.DataFactory.namedNode(subject),
+            N3.DataFactory.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+            N3.DataFactory.namedNode(type)
+          );
+        });
+        return;
+      }
+      
+      // Handle regular predicates
+      const values = Array.isArray(objects) ? objects : [objects];
+      values.forEach(value => {
+        // Determine the object type (literal or URI)
+        let object;
+        if (typeof value === 'object' && value !== null) {
+          if (value['@id']) {
+            // URI reference
+            object = N3.DataFactory.namedNode(value['@id']);
+          } else if (value['@value']) {
+            // Typed or language literal
+            const datatype = value['@type'] ? N3.DataFactory.namedNode(value['@type']) : null;
+            const language = value['@language'] || '';
+            object = N3.DataFactory.literal(value['@value'], language || datatype);
+          } else {
+            // Skip complex objects for simplicity
+            return;
+          }
+        } else if (typeof value === 'string') {
+          object = N3.DataFactory.literal(value);
+        } else if (value !== null) {
+          object = N3.DataFactory.literal(String(value));
+        } else {
+          return; // Skip null values
+        }
+        
+        store.addQuad(
+          N3.DataFactory.namedNode(subject),
+          N3.DataFactory.namedNode(predicate),
+          object
+        );
+      });
+    });
+  });
+  
+  // Convert to N-Triples string
+  const writer = new N3.Writer({ format: 'N-Triples' });
+  store.forEach(quad => writer.addQuad(quad));
+  
+  return new Promise((resolve, reject) => {
+    writer.end((error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+  });
+}
 
 // Function to run reasoning with EYE reasoner
 async function runEyeReasoner(triples, rules, query) {
@@ -213,26 +308,49 @@ async function runSparqlQuery(triples) {
 }
 
 // Main execution
-runMapping(pharmaMapping, './medication.csv', 'medication.csv')
-  .then(async ({ rmlMapping, triples }) => {
-    // Save the combined output to a single .nt file
-    const combinedOutput = rmlMapping + '\n' + triples;
-    fs.writeFileSync('medication.nt', combinedOutput, 'utf8');
-    console.log("RML mapping and triples saved to medication.nt");
+async function main() {
+  try {
+    // Read the CSV file
+    const csvData = fs.readFileSync('./medication.csv', 'utf8');
+    
+    // Create input files object for RML Mapper
+    const inputFiles = {
+      'medication.csv': csvData
+    };
+    
+    // Configure RML mapping options
+    const options = {
+      toRDF: false, // Output as JSON-LD
+    };
+    
+    console.log("Running RML mapping with rmlmapper-js...");
+    
+    // Execute the RML mapping
+    const jsonLdResult = await parseTurtle(pharmaMapping, inputFiles, options);
+    
+    // Save the JSON-LD output
+    fs.writeFileSync('medication-jsonld.json', JSON.stringify(jsonLdResult, null, 2), 'utf8');
+    console.log("JSON-LD mapping saved to medication-jsonld.json");
+    
+    // Convert JSON-LD to N-Triples for the reasoner
+    const triples = await jsonLdToNTriples(jsonLdResult);
+    
+    // Save the N-Triples output
+    fs.writeFileSync('medication.nt', triples, 'utf8');
+    console.log("N-Triples mapping saved to medication.nt");
+    
+    // Run EYE reasoner with the generated triples
+    await runEyeReasoner(triples, rules, query);
+    
+    // Run SPARQL query with the generated triples
+    await runSparqlQuery(triples);
+    
+  } catch (error) {
+    console.error("An error occurred:", error);
+    console.log("\nDiagnostic information:");
+    console.log(error.stack);
+  }
+}
 
-    try {
-      // Run EYE reasoner
-      await runEyeReasoner(triples, rules, query);
-      
-      // Run SPARQL query
-      await runSparqlQuery(triples);
-      
-    } catch (error) {
-      console.log("An error occurred during processing:", error);
-      console.log("\nDiagnostic information:");
-      console.log("Triples preview:", triples.substring(0, 200) + "...");
-    }
-  })
-  .catch(error => {
-    console.error("Mapping failed:", error);
-  });
+// Run the main function
+main();
