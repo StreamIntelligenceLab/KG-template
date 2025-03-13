@@ -7,7 +7,7 @@ This project demonstrates how to use YARRRML mappings to convert CSV data into R
 - **index.mjs**  
   - The **first index.mjs** is a self-contained script that:
     - Converts a YARRRML mapping into an RML mapping.
-    - Uses `@comake/rmlmapper-js` to process a CSV file (`medication.csv`) and generate JSON-LD.
+    - Uses `@comake/rmlmapper-js` to process a CSV file (`calls.csv`) and generate JSON-LD.
     - Converts JSON-LD to N-Triples.
     - Runs reasoning with the EYE reasoner (via the `eyereasoner` package) and saves the result in `reasoning-result.n3`.
     - Executes a SPARQL query using the Comunica query engine and logs aggregated medication statistics.
