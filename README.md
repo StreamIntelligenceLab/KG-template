@@ -39,6 +39,11 @@ This project demonstrates how to use YARRRML mappings to convert CSV data into R
   - `n3`
   - `jsonld`
 
+## Install packages:
+```bash
+npm install
+```
+
 ## How to Run:
 
 You can run the project using the start script defined in package.json.
