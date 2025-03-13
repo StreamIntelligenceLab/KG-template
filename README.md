@@ -60,7 +60,7 @@ This will execute the index.mjs file which:
 
 When you run the scripts, several files are generated:
 
-* reasoner-input.n3 and reasoner-query.n3: Inputs provided to the EYE reasoner.
+* reasoner-input.n3: Input provided to the EYE reasoner.
 
 * reasoning-result.n3: The output of the reasoning process.
 
