@@ -1,47 +1,36 @@
 // index.mjs
-import { parseTurtle } from '@comake/rmlmapper-js';
 import fs from 'fs';
+import { parseTurtle } from '@comake/rmlmapper-js';
 import { n3reasoner } from 'eyereasoner';
 import { QueryEngine } from '@comunica/query-sparql';
 import * as N3 from 'n3';
 
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const yarrrmlParserModule = require('@rmlio/yarrrml-parser/lib/rml-generator');
+const YarrrmlParser = yarrrmlParserModule.default || yarrrmlParserModule;
+
+// Create an instance of the YARRRML parser
+const yarrrmlParserInstance = new YarrrmlParser();
+
 /* 
   YARRRML mapping to reference medication.csv
 */
-const pharmaMapping = `
-@prefix rr: <http://www.w3.org/ns/r2rml#> .
-@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
-@prefix ql: <http://semweb.mmlab.be/ns/ql#> .
-@prefix ex: <http://example.com/> .
-@prefix schema: <http://schema.org/> .
-@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-
-<#LOGICALSOURCE>
-  rml:source "medication.csv";
-  rml:referenceFormulation ql:CSV.
-
-<#Mapping>
-  rml:logicalSource <#LOGICALSOURCE>;
-  
-  rr:subjectMap [
-    rr:template "http://example.com/medication/{artikel___ATC___label}";
-    rr:class ex:Medication;
-  ];
-  
-  rr:predicateObjectMap [
-    rr:predicate ex:date;
-    rr:objectMap [ rml:reference "begin_date" ];
-  ];
-  
-  rr:predicateObjectMap [
-    rr:predicate schema:identifier;
-    rr:objectMap [ rml:reference "artikel___ATC___label" ];
-  ];
-  
-  rr:predicateObjectMap [
-    rr:predicate ex:room;
-    rr:objectMap [ rml:reference "room" ];
-  ].
+const pharmaMappingYARRRML = `
+prefixes:
+  ex: http://example.com/
+  schema: http://schema.org/
+  xsd: http://www.w3.org/2001/XMLSchema#
+mappings:
+  medication:
+    sources:
+      - ['medication.csv~csv']
+    s: ex:medication_$(artikel___ATC___label)
+    po:
+      - [a, ex:Medication]
+      - [schema:identifier, $(artikel___ATC___label)]
+      - [ex:date, $(begin_date)]
+      - [ex:room, $(room)]
 `;
 
 // Define simple reasoning rules in N3 syntax
@@ -52,25 +41,13 @@ const rules = `
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
 
 # Basic classification of all medications
-{
-  ?med schema:identifier ?id.
-} => {
-  ?med a ex:Medication.
-}.
+{ ?med schema:identifier ?id. } => { ?med a ex:Medication. }.
 
 # Classify medications by room
-{
-  ?med ex:room "1".
-} => {
-  ?med a ex:Room1Medication.
-}.
+{ ?med ex:room "1". } => { ?med a ex:Room1Medication. }.
 
 # Extract simple room statistics for easier querying
-{
-  ?med ex:room ?room.
-} => {
-  ?med ex:isAdministeredInRoom ?room.
-}.
+{ ?med ex:room ?room. } => { ?med ex:isAdministeredInRoom ?room. }.
 `;
 
 // Simple query for the reasoner
@@ -79,7 +56,7 @@ const query = `
 @prefix schema: <http://schema.org/>.
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>.
 
-{
+{ 
   ?med a ex:Medication.
   ?med schema:identifier ?id.
   ?med ex:date ?date.
@@ -144,7 +121,7 @@ async function jsonLdToNTriples(jsonLdData) {
         } else {
           return; // Skip null values
         }
-        
+
         store.addQuad(
           N3.DataFactory.namedNode(subject),
           N3.DataFactory.namedNode(predicate),
@@ -159,6 +136,18 @@ async function jsonLdToNTriples(jsonLdData) {
   store.forEach(quad => writer.addQuad(quad));
   
   return new Promise((resolve, reject) => {
+    writer.end((error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+  });
+}
+
+// Helper function to serialize an array of quads to Turtle string
+async function quadsToTurtle(quads) {
+  return new Promise((resolve, reject) => {
+    const writer = new N3.Writer({ format: 'Turtle' });
+    writer.addQuads(quads);
     writer.end((error, result) => {
       if (error) reject(error);
       else resolve(result);
@@ -216,8 +205,8 @@ async function runEyeReasoner(triples, rules, query) {
             med.date = quad.object.value;
           } else if (quad.predicate.value === 'http://example.com/room') {
             med.room = quad.object.value;
-          } else if (quad.predicate.value === 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' && 
-                    quad.object.value === 'http://example.com/Room1Medication') {
+          } else if (quad.predicate.value === 'http://www.w3.org/1999/02/22/rdf-syntax-ns#type' &&
+            quad.object.value === 'http://example.com/Room1Medication') {
             med.isRoom1 = true;
           }
         }
@@ -310,47 +299,40 @@ async function runSparqlQuery(triples) {
 // Main execution
 async function main() {
   try {
+    // Convert the YARRRML mapping to RML (as an array of quads)
+    console.log("Converting YARRRML mapping to RML mapping...");
+    const rmlMappingQuads = await yarrrmlParserInstance.convert(pharmaMappingYARRRML);
+    console.log("Converted RML Mapping (quads):");
+    console.log(rmlMappingQuads);
+
+    // Serialize the array of quads to a Turtle string
+    const rmlMapping = await quadsToTurtle(rmlMappingQuads);
+    console.log("Serialized RML Mapping (Turtle):");
+    console.log(rmlMapping);
+
     // Read the CSV file
     const csvData = fs.readFileSync('./medication.csv', 'utf8');
-    
-    // Create input files object for RML Mapper
-    const inputFiles = {
-      'medication.csv': csvData
-    };
-    
-    // Configure RML mapping options
-    const options = {
-      toRDF: false, // Output as JSON-LD
-    };
-    
-    console.log("Running RML mapping with rmlmapper-js...");
-    
-    // Execute the RML mapping
-    const jsonLdResult = await parseTurtle(pharmaMapping, inputFiles, options);
-    
-    // Save the JSON-LD output
+    const inputFiles = { 'medication.csv': csvData };
+    const options = { toRDF: false }; // Output as JSON-LD
+
+    console.log("Running RML mapping with rmlmapper-js using the converted YARRRML schema...");
+    const jsonLdResult = await parseTurtle(rmlMapping, inputFiles, options);
     fs.writeFileSync('medication-jsonld.json', JSON.stringify(jsonLdResult, null, 2), 'utf8');
     console.log("JSON-LD mapping saved to medication-jsonld.json");
-    
-    // Convert JSON-LD to N-Triples for the reasoner
+
+    // Convert JSON-LD to N-Triples for reasoning and SPARQL querying
     const triples = await jsonLdToNTriples(jsonLdResult);
-    
-    // Save the N-Triples output
     fs.writeFileSync('medication.nt', triples, 'utf8');
     console.log("N-Triples mapping saved to medication.nt");
-    
-    // Run EYE reasoner with the generated triples
+
+    // Run reasoning and SPARQL queries
     await runEyeReasoner(triples, rules, query);
-    
-    // Run SPARQL query with the generated triples
     await runSparqlQuery(triples);
-    
+
   } catch (error) {
     console.error("An error occurred:", error);
-    console.log("\nDiagnostic information:");
-    console.log(error.stack);
+    console.error(error.stack);
   }
 }
 
-// Run the main function
 main();

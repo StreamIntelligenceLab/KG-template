@@ -1,4 +1,4 @@
-// index.mjs
+// own_mapper.mjs
 import { runMapping } from './rdf-processor.js';
 import fs from 'fs';
 import { n3reasoner } from 'eyereasoner';
